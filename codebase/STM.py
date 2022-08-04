@@ -7,95 +7,82 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
+import strawberryfields as sf
+from strawberryfields import ops
+
 import os
 
 
-history = autoencoder.fit(x_train, x_train,
-                epochs=300,
-                validation_data=(x_train, x_train))
+def STM():
+    history = autoencoder.fit(x_train, x_train,
+                    epochs=300,
+                    validation_data=(x_train, x_train))
 
 
-encoded_st = autoencoder.encoder(x_train).numpy()
-decoded_st = autoencoder.decoder(encoded_st).numpy()
+    encoded_st = autoencoder.encoder(x_train).numpy()
+    decoded_st = autoencoder.decoder(encoded_st).numpy()
+    classical_loss_stat = history.history["loss"]
+
+    print('The encoded state is: ' + str(encoded_st))
+    np.savetxt(save_folder_name +'/encoded_ '+ str(train_state_select) +'.txt', encoded_st)
 
 
+    # initialize engine and program
+    eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": cutoff_dim})
+    qnn = sf.Program(modes)
 
-plt.plot(history.history["loss"], label="Training Loss")
-plt.plot(history.history["val_loss"], label="Validation Loss")
-plt.legend()
-
-print(encoded_st)
-np.savetxt(save_folder_name +'/encoded_ '+ str(train_state_select) +'.txt', encoded_st)
-
-import strawberryfields as sf
-from strawberryfields import ops
-sf.about()
+    # initialize QNN weights
+    weights = init_weights(modes, Qlayers) # our TensorFlow weights
+    num_params = np.prod(weights.shape)   # total number of parameters in our model
 
 
-# initialize engine and program
-eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": cutoff_dim})
-qnn = sf.Program(modes)
-
-# initialize QNN weights
-weights = init_weights(modes, Qlayers) # our TensorFlow weights
-num_params = np.prod(weights.shape)   # total number of parameters in our model
+    # Create array of Strawberry Fields symbolic gate arguments, matching
+    # the size of the weights Variable.
+    sf_params = np.arange(num_params).reshape(weights.shape).astype(np.str)
+    sf_params = np.array([qnn.params(*i) for i in sf_params])
 
 
-# In[15]:
-
-
-# Create array of Strawberry Fields symbolic gate arguments, matching
-# the size of the weights Variable.
-sf_params = np.arange(num_params).reshape(weights.shape).astype(np.str)
-sf_params = np.array([qnn.params(*i) for i in sf_params])
-
-
-# Construct the symbolic Strawberry Fields program by
-# looping and applying layers to the program.
-with qnn.context as q:
-    for k in range(Qlayers):
-        layer(sf_params[k], q)
+    # Construct the symbolic Strawberry Fields program by
+    # looping and applying layers to the program.
+    with qnn.context as q:
+        for k in range(Qlayers):
+            layer(sf_params[k], q)
 
 
 
 
-opt = tf.keras.optimizers.Adam(learning_rate=lr)
+    opt = tf.keras.optimizers.Adam(learning_rate=lr)
 
 
-# ### Train the quantum decoder.
+    fid_progress = []
+    loss_progress = []
+    best_fid = 0
 
-# In[18]:
+    for i in range(reps):
+        # reset the engine if it has already been executed
+        if eng.run_progs:
+            eng.reset()
 
+        with tf.GradientTape() as tape:
+            loss, fid, ket, trace = cost(weights)
 
-fid_progress = []
-loss_progress = []
-best_fid = 0
+        # Stores fidelity at each step
+        fid_progress.append(fid.numpy())
 
-for i in range(reps):
-    # reset the engine if it has already been executed
-    if eng.run_progs:
-        eng.reset()
+        loss_progress.append(loss)
 
-    with tf.GradientTape() as tape:
-        loss, fid, ket, trace = cost(weights)
+        if fid > best_fid:
+            # store the new best fidelity and best state
+            best_fid = fid.numpy()
+            learnt_state = ket.numpy()
 
-    # Stores fidelity at each step
-    fid_progress.append(fid.numpy())
+        # one repetition of the optimization
+        gradients = tape.gradient(loss, weights)
+        opt.apply_gradients(zip([gradients], [weights]))
 
-    loss_progress.append(loss)
-
-    if fid > best_fid:
-        # store the new best fidelity and best state
-        best_fid = fid.numpy()
-        learnt_state = ket.numpy()
-
-    # one repetition of the optimization
-    gradients = tape.gradient(loss, weights)
-    opt.apply_gradients(zip([gradients], [weights]))
-
-    # Prints progress at every rep
-    if i % 1 == 0:
-        print("Rep: {} Cost: {:.4f} Fidelity: {:.4f} Trace: {:.4f}".format(i, loss, fid, trace))
+        # Prints progress at every rep
+        if i % 1 == 0:
+            print("Rep: {} Cost: {:.4f} Fidelity: {:.4f} Trace: {:.4f}".format(i, loss, fid, trace))
 
 
 # ### Produce fidelity plot.
