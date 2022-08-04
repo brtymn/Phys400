@@ -1,13 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Split Training Model For The Hybrid Autoencoder
-
-# ### Library imports.
-
-# In[1]:
-
-
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras import layers, losses
@@ -20,105 +10,26 @@ import math
 import os
 
 
-
-
-autoencoder = Autoencoder(latent_dim)
-
-
-x_train, target_state = GenerateTargetState(input_len, train_state_select)
-print('The target state for the training is chosen to be ' + str(target_state))
-
-
-# ### Compile the classical autoencoder.
-
-# In[6]:
-
-
-autoencoder.compile(optimizer='adam', loss=losses.MeanSquaredError())
-
-
-# ### Train the classical autoencoder and obtain the latent space.
-
-# In[7]:
-
-
 history = autoencoder.fit(x_train, x_train,
                 epochs=300,
                 validation_data=(x_train, x_train))
-
-
-# In[8]:
 
 
 encoded_st = autoencoder.encoder(x_train).numpy()
 decoded_st = autoencoder.decoder(encoded_st).numpy()
 
 
-# In[9]:
-
 
 plt.plot(history.history["loss"], label="Training Loss")
 plt.plot(history.history["val_loss"], label="Validation Loss")
 plt.legend()
 
-
-# In[10]:
-
-
 print(encoded_st)
 np.savetxt(save_folder_name +'/encoded_ '+ str(train_state_select) +'.txt', encoded_st)
-
-
-# In[11]:
-
 
 import strawberryfields as sf
 from strawberryfields import ops
 sf.about()
-
-
-# In[12]:
-
-
-def layer(params, q):
-    """CV quantum neural network layer acting on ``N`` modes.
-
-    Args:
-        params (list[float]): list of length ``2*(max(1, N-1) + N**2 + n)`` containing
-            the number of parameters for the layer
-        q (list[RegRef]): list of Strawberry Fields quantum registers the layer
-            is to be applied to
-    """
-    ops.Dgate(tf.clip_by_value(encoded_st[0][0], clip_value_min = -alpha_clip, clip_value_max = alpha_clip), math.degrees(encoded_st[0][1])) | q[0]
-
-    N = len(q)
-    M = int(N * (N - 1)) + max(1, N - 1)
-
-    rphi = params[-N+1:]
-    s = params[M:M+N]
-    dr = params[2*M+N:2*M+2*N]
-    dp = params[2*M+2*N:2*M+3*N]
-    k = params[2*M+3*N:2*M+4*N]
-
-    ops.Rgate(rphi[0]) | q[0]
-
-    for i in range(N):
-        ops.Sgate(s[i]) | q[i]
-
-    ops.Rgate(rphi[0]) | q[0]
-
-    for i in range(N):
-        ops.Dgate(dr[i], dp[i]) | q[i]
-        ops.Kgate(k[i]) | q[i]
-
-
-# ### Initialization of layer weights.
-
-# In[13]:
-
-
-
-# In[14]:
 
 
 # initialize engine and program
@@ -146,39 +57,6 @@ with qnn.context as q:
         layer(sf_params[k], q)
 
 
-# ### Definition of the quantum cost function.
-
-# In[16]:
-
-
-def cost(weights):
-    # Create a dictionary mapping from the names of the Strawberry Fields
-    # free parameters to the TensorFlow weight values.
-    mapping = {p.name: w for p, w in zip(sf_params.flatten(), tf.reshape(weights, [-1]))}
-
-    # Run engine
-    state = eng.run(qnn, args=mapping).state
-
-    # Extract the statevector
-    ket = state.ket()
-
-    # Compute the fidelity between the output statevector
-    # and the target state.
-    fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
-
-    # Objective function to minimize
-    #cost = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state) - 1)
-    #return cost, fidelity, ket
-    # Instead of the Cost function, maybe it is better to break it down to components
-    # at least, when the Fock basis is insufficent, it will be visible
-    difference = tf.reduce_sum(tf.abs(ket - target_state))
-    fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
-    return difference, fidelity, ket, tf.math.real(state.trace())
-
-
-# ### Optimizer definition.
-
-# In[17]:
 
 
 opt = tf.keras.optimizers.Adam(learning_rate=lr)

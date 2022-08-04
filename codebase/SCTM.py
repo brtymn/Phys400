@@ -1,11 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Self Consistent Training Model For The Hybrid Autoencoder
-
-# ### Library imports.
-
-# In[1]:
 
 
 import tensorflow as tf
@@ -26,38 +18,6 @@ from matplotlib.pyplot import figure
 figure(figsize=(12, 6), dpi=100)
 
 
-
-# ### Initialization of layer weights.
-
-# In[4]:
-
-
-
-
-# In[5]:
-
-
-autoencoder = Autoencoder(latent_dim)
-
-
-
-x_train, target_state = GenerateTargetState(input_len, train_state_select)
-print('The target state for the training is chosen to be ' + str(target_state))
-
-
-# ### Compile the classical autoencoder.
-
-# In[7]:
-
-
-autoencoder.compile(optimizer='adam', loss=losses.MeanSquaredError())
-
-
-# ### Initialization of the feedback loop that contains the training of the classical and quantum layers.
-
-# In[8]:
-
-
 fid_progress = [[], [], [], [], [], [], []]
 loss_progress = [[], [], [], [], [], [], []]
 
@@ -67,37 +27,6 @@ for j in range(sctm_iterations):
 
     encoded_st = autoencoder.encoder(np.array([target_state])).numpy()
     #decoded_st = autoencoder.decoder(encoded_st).numpy()
-
-    def layer(params, q):
-        """CV quantum neural network layer acting on ``N`` modes.
-
-        Args:
-            params (list[float]): list of length ``2*(max(1, N-1) + N**2 + n)`` containing
-                the number of parameters for the layer
-            q (list[RegRef]): list of Strawberry Fields quantum registers the layer
-                is to be applied to
-        """
-        ops.Dgate(tf.clip_by_value(encoded_st[0][0], clip_value_min = -alpha_clip, clip_value_max = alpha_clip), math.degrees(encoded_st[0][1])) | q[0]
-
-        N = len(q)
-        M = int(N * (N - 1)) + max(1, N - 1)
-
-        rphi = params[-N+1:]
-        s = params[M:M+N]
-        dr = params[2*M+N:2*M+2*N]
-        dp = params[2*M+2*N:2*M+3*N]
-        k = params[2*M+3*N:2*M+4*N]
-
-        ops.Rgate(rphi[0]) | q[0]
-
-        for i in range(N):
-            ops.Sgate(s[i]) | q[i]
-
-        ops.Rgate(rphi[0]) | q[0]
-
-        for i in range(N):
-            ops.Dgate(dr[i], dp[i]) | q[i]
-            ops.Kgate(k[i]) | q[i]
 
     # initialize engine and program
     eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": cutoff_dim})
@@ -119,29 +48,6 @@ for j in range(sctm_iterations):
         for k in range(Qlayers):
             layer(sf_params[k], q)
 
-    def cost(weights):
-        # Create a dictionary mapping from the names of the Strawberry Fields
-        # free parameters to the TensorFlow weight values.
-        mapping = {p.name: w for p, w in zip(sf_params.flatten(), tf.reshape(weights, [-1]))}
-
-        # Run engine
-        state = eng.run(qnn, args=mapping).state
-
-        # Extract the statevector
-        ket = state.ket()
-
-        # Compute the fidelity between the output statevector
-        # and the target state.
-        fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
-
-        # Objective function to minimize
-        #cost = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state) - 1)
-        #return cost, fidelity, ket
-        # Instead of the Cost function, maybe it is better to break it down to components
-        # at least, when the Fock basis is insufficent, it will be visible
-        difference = tf.reduce_sum(tf.abs(ket - target_state))
-        fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
-        return difference, fidelity, ket, tf.math.real(state.trace())
 
     opt = tf.keras.optimizers.Adam(learning_rate=lr)
 
