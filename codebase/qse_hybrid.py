@@ -1,37 +1,18 @@
-# Number of modes
-modes = 1
-# tt
-train_state_select = 0
-# Cutoff dimension (number of Fock states)
-cutoff_dim = 3
-# Input vector length.
-input_len = 3
-# Number of layers (depth)
-Qlayers = 25
-# Number of steps in optimization routine performing gradient descent
-reps = 200
-# Learning rate
-lr = 0.05
-# Standard deviation of initial parameters
-passive_sd = 0.4
-active_sd = 0.02
-# The gamma parameter in the penalty function, given by the reference paper.
-norm_weight = 400
-# Seeds for the RNG functions to be able to reproduce results.
-tf.random.set_seed(137)
-np.random.seed(137)
-# Phase space circile restriciton radius.
-alpha_clip = 5
-save_folder_name = str(input_len) + '_inputs'
-os.makedirs(save_folder_name, exist_ok=True)
-latent_dim = 2
-# Number of iterations to train the classical autoencoder.
-classical_epochs = 100
-# Number of feedback loop iterations.
-sctm_iterations = 3
+import numpy as np
+import tensorflow as tf
+import strawberryfields as sf
+from strawberryfields import ops
+from tensorflow.keras.models import Model
+from tensorflow.keras import layers, losses
+from sklearn.metrics import accuracy_score, precision_score, recall_score
+import math
 
 
-def init_weights(modes, layers, active_sd=active_sd, passive_sd=passive_sd):
+from classical_autoencoder import Autoencoder
+import params
+from state_viz import wigner
+
+def init_weights(modes, layers, active_sd=params.active_sd, passive_sd=params.passive_sd):
     """Initialize a 2D TensorFlow Variable containing normally-distributed
     random weights for an ``N`` mode quantum neural network with ``L`` layers.
 
@@ -69,14 +50,13 @@ def init_weights(modes, layers, active_sd=active_sd, passive_sd=passive_sd):
 
     return weights
 
-
 def GenerateTargetState(input_len, f):
     state = np.zeros(input_len)
     state[f] = 1.0
     train = np.array([state])
     return train, state
 
-def layer(params, q):
+def layer(params, q, encoded_st):
     """CV quantum neural network layer acting on ``N`` modes.
 
     Args:
@@ -85,7 +65,7 @@ def layer(params, q):
         q (list[RegRef]): list of Strawberry Fields quantum registers the layer
             is to be applied to
     """
-    ops.Dgate(tf.clip_by_value(encoded_st[0][0], clip_value_min = -alpha_clip, clip_value_max = alpha_clip), math.degrees(encoded_st[0][1])) | q[0]
+    ops.Dgate(tf.clip_by_value(encoded_st[0][0], clip_value_min = -5, clip_value_max = 5), math.degrees(encoded_st[0][1])) | q[0]
 
     N = len(q)
     M = int(N * (N - 1)) + max(1, N - 1)
@@ -107,7 +87,7 @@ def layer(params, q):
         ops.Dgate(dr[i], dp[i]) | q[i]
         ops.Kgate(k[i]) | q[i]
 
-def cost(weights):
+def cost(weights, sf_params, eng, qnn):
     # Create a dictionary mapping from the names of the Strawberry Fields
     # free parameters to the TensorFlow weight values.
     mapping = {p.name: w for p, w in zip(sf_params.flatten(), tf.reshape(weights, [-1]))}
@@ -131,8 +111,153 @@ def cost(weights):
     fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
     return difference, fidelity, ket, tf.math.real(state.trace())
 
-x_train, target_state = GenerateTargetState(input_len, train_state_select)
+def STM():
+    history = autoencoder.fit(x_train, x_train,
+                    epochs=300,
+                    validation_data=(x_train, x_train))
+
+    encoded_st = autoencoder.encoder(x_train).numpy()
+    #decoded_st = autoencoder.decoder(encoded_st).numpy()
+    classical_loss_stat = history.history["loss"]
+
+    np.savetxt(params.save_folder_name +'/encoded_ '+ str(params.train_state_select) +'.txt', encoded_st)
+
+
+    # initialize engine and program
+    eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": params.cutoff_dim})
+    qnn = sf.Program(params.modes)
+
+    # initialize QNN weights
+    weights = init_weights(params.modes, params.Qlayers) # our TensorFlow weights
+    num_params = np.prod(weights.shape)   # total number of parameters in our model
+
+
+    # Create array of Strawberry Fields symbolic gate arguments, matching
+    # the size of the weights Variable.
+    sf_params = np.arange(num_params).reshape(weights.shape).astype(np.str)
+    sf_params = np.array([qnn.params(*i) for i in sf_params])
+
+
+    # Construct the symbolic Strawberry Fields program by
+    # looping and applying layers to the program.
+    with qnn.context as q:
+        for k in range(params.Qlayers):
+            layer(sf_params[k], q, encoded_st)
+
+    opt = tf.keras.optimizers.Adam(learning_rate=params.lr)
+
+    fid_progress = []
+    loss_progress = []
+    best_fid = 0
+
+    for i in range(params.reps):
+        # reset the engine if it has already been executed
+        if eng.run_progs:
+            eng.reset()
+
+        with tf.GradientTape() as tape:
+            loss, fid, ket, trace = cost(weights, sf_params, eng, qnn)
+
+        # Stores fidelity at each step
+        fid_progress.append(fid.numpy())
+
+        loss_progress.append(loss)
+
+        if fid > best_fid:
+            # store the new best fidelity and best state
+            best_fid = fid.numpy()
+            learnt_state = ket.numpy()
+
+        # one repetition of the optimization
+        gradients = tape.gradient(loss, weights)
+        opt.apply_gradients(zip([gradients], [weights]))
+
+        # Prints progress at every rep
+        if i % 1 == 0:
+            print("Rep: {} Cost: {:.4f} Fidelity: {:.4f} Trace: {:.4f}".format(i, loss, fid, trace))
+    np.savetxt(params.save_folder_name + '/fidelity' + '.txt', fid_progress)
+    np.savetxt(params.save_folder_name + '/loss' + '.txt', fid_progress)
+    rho_target = np.outer(target_state, target_state.conj())
+    rho_learnt = np.outer(learnt_state, learnt_state.conj())
+    X, P, W = wigner(rho_learnt)
+    np.savetxt(params.save_folder_name + '/x' + str(params.train_state_select) + '.txt', X)
+    np.savetxt(params.save_folder_name + '/p' + str(params.train_state_select) + '.txt', P)
+    np.savetxt(params.save_folder_name + '/w' + str(params.train_state_select) + '.txt', W)
+
+
+def SCTM():
+    fid_progress = [[], [], [], [], [], [], []]
+    loss_progress = [[], [], [], [], [], [], []]
+
+
+    for j in range(sctm_iterations):
+        history = autoencoder.fit(x_train, x_train,epochs=classical_epochs)
+
+        encoded_st = autoencoder.encoder(np.array([target_state])).numpy()
+        #decoded_st = autoencoder.decoder(encoded_st).numpy()
+
+        # initialize engine and program
+        eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": cutoff_dim})
+        qnn = sf.Program(modes)
+
+        # initialize QNN weights
+        weights = init_weights(modes, Qlayers) # our TensorFlow weights
+        num_params = np.prod(weights.shape)   # total number of parameters in our model
+
+        # Create array of Strawberry Fields symbolic gate arguments, matching
+        # the size of the weights Variable.
+        sf_params = np.arange(num_params).reshape(weights.shape).astype(np.str)
+        sf_params = np.array([qnn.params(*i) for i in sf_params])
+
+
+        # Construct the symbolic Strawberry Fields program by
+        # looping and applying layers to the program.
+        with qnn.context as q:
+            for k in range(Qlayers):
+                layer(sf_params[k], q)
+
+
+        opt = tf.keras.optimizers.Adam(learning_rate=lr)
+
+        fidp = []
+        lossp = []
+        best_fid = 0
+
+        for i in range(reps):
+            # reset the engine if it has already been executed
+            if eng.run_progs:
+                eng.reset()
+
+            with tf.GradientTape() as tape:
+                loss, fid, ket, trace = cost(weights)
+
+            # Stores fidelity at each step
+            fidp.append(fid.numpy())
+            lossp.append(loss)
+
+            if fid > best_fid:
+                # store the new best fidelity and best state
+                best_fid = fid.numpy()
+                learnt_state = ket.numpy()
+
+            # one repetition of the optimization
+            gradients = tape.gradient(loss, weights)
+            opt.apply_gradients(zip([gradients], [weights]))
+             # Prints progress at every rep
+            if i % 1 == 0:
+                print("Rep: {} Cost: {:.4f} Fidelity: {:.4f} Trace: {:.4f}".format(i, loss, fid, trace))
+
+        fid_progress[j] = fidp
+        loss_progress[j] = lossp
+
+        x_train = np.array([learnt_state])
+
+
+
+x_train, target_state = GenerateTargetState(params.input_len, params.train_state_select)
 print('The target state for the training is chosen to be ' + str(target_state))
 
-autoencoder = Autoencoder(latent_dim)
+autoencoder = Autoencoder(params.latent_dim)
 autoencoder.compile(optimizer='adam', loss=losses.MeanSquaredError())
+
+STM()

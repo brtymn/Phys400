@@ -6,7 +6,7 @@ from classical_autoencoder import Autoencoder
 '''
 Split Traning Model function call.
 '''
-def STM():
+def STM(autoencoder, x_train):
     history = autoencoder.fit(x_train, x_train,
                     epochs=300,
                     validation_data=(x_train, x_train))
@@ -74,6 +74,6 @@ def STM():
         np.savetxt(save_folder_name + '/fidelity' + '.txt', fid_progress)
         np.savetxt(save_folder_name + '/loss' + '.txt', fid_progress)
         X, P, W = wigner(rho_learnt)
-        np.savetxt(save_folder_name + '/x' + str(train_state_select) + '.txt', X)
-        np.savetxt(save_folder_name + '/p' + str(train_state_select) + '.txt', P)
-        np.savetxt(save_folder_name + '/w' + str(train_state_select) + '.txt', W)
+        np.savetxt(save_folder_name + 'STM//x' + str(train_state_select) + '.txt', X)
+        np.savetxt(save_folder_name + 'STM//p' + str(train_state_select) + '.txt', P)
+        np.savetxt(save_folder_name + 'STM/w' + str(train_state_select) + '.txt', W)

@@ -56,7 +56,7 @@ def wigner(rho):
 
     return Q, P, W / 2
 
-def WignerFUncPlot():
+def WignerFuncPlot():
     rho_target = np.outer(target_state, target_state.conj())
     rho_learnt = np.outer(learnt_state, learnt_state.conj())
     fig = plt.figure()
