@@ -102,11 +102,6 @@ def cost(weights, sf_params, eng, qnn, target_state):
     # and the target state.
     fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
 
-    # Objective function to minimize
-    #cost = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state) - 1)
-    #return cost, fidelity, ket
-    # Instead of the Cost function, maybe it is better to break it down to components
-    # at least, when the Fock basis is insufficent, it will be visible
     difference = tf.reduce_sum(tf.abs(ket - target_state))
     fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
     return difference, fidelity, ket, tf.math.real(state.trace())

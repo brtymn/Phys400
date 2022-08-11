@@ -13,14 +13,15 @@ if __name__ == "__main__":
 
     # This part is for the command line arguements.
     parser = argparse.ArgumentParser()
-    parser.add_argument("method", help = "Toggle to use the Split Training Method.", action = 'store')
-
+    parser.add_argument("method", help = "Select the training method you want to use.", action = 'store')
+    parser.add_argument("--fock", type = str)
 
     # Parse the arguements from the command line.
     args = parser.parse_args()
     # Save the parsed arguements into global variables.
     params.method_select = args.method
-    print(params.method_select)
+    params.fock_space = args.fock.split(',')
+    print(params.fock_space)
     print('Code execution started.')
 
     # Run the code.
