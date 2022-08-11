@@ -32,3 +32,4 @@ latent_dim = 2
 classical_epochs = 100
 # Number of feedback loop iterations.
 sctm_iterations = 3
+method_select = 0

@@ -87,7 +87,7 @@ def layer(params, q, encoded_st):
         ops.Dgate(dr[i], dp[i]) | q[i]
         ops.Kgate(k[i]) | q[i]
 
-def cost(weights, sf_params, eng, qnn):
+def cost(weights, sf_params, eng, qnn, target_state):
     # Create a dictionary mapping from the names of the Strawberry Fields
     # free parameters to the TensorFlow weight values.
     mapping = {p.name: w for p, w in zip(sf_params.flatten(), tf.reshape(weights, [-1]))}
@@ -111,7 +111,9 @@ def cost(weights, sf_params, eng, qnn):
     fidelity = tf.abs(tf.reduce_sum(tf.math.conj(ket) * target_state)) ** 2
     return difference, fidelity, ket, tf.math.real(state.trace())
 
-def STM():
+def STM(x_train, target_state):
+    autoencoder = Autoencoder(params.latent_dim)
+    autoencoder.compile(optimizer='adam', loss=losses.MeanSquaredError())
     history = autoencoder.fit(x_train, x_train,
                     epochs=300,
                     validation_data=(x_train, x_train))
@@ -156,7 +158,7 @@ def STM():
             eng.reset()
 
         with tf.GradientTape() as tape:
-            loss, fid, ket, trace = cost(weights, sf_params, eng, qnn)
+            loss, fid, ket, trace = cost(weights, sf_params, eng, qnn, target_state)
 
         # Stores fidelity at each step
         fid_progress.append(fid.numpy())
@@ -184,24 +186,23 @@ def STM():
     np.savetxt(params.save_folder_name + '/p' + str(params.train_state_select) + '.txt', P)
     np.savetxt(params.save_folder_name + '/w' + str(params.train_state_select) + '.txt', W)
 
-
-def SCTM():
+def SCTM(x_train, target_state):
     fid_progress = [[], [], [], [], [], [], []]
     loss_progress = [[], [], [], [], [], [], []]
 
 
-    for j in range(sctm_iterations):
-        history = autoencoder.fit(x_train, x_train,epochs=classical_epochs)
+    for j in range(params.sctm_iterations):
+        history = autoencoder.fit(x_train, x_train, epochs=params.classical_epochs)
 
         encoded_st = autoencoder.encoder(np.array([target_state])).numpy()
         #decoded_st = autoencoder.decoder(encoded_st).numpy()
 
         # initialize engine and program
-        eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": cutoff_dim})
-        qnn = sf.Program(modes)
+        eng = sf.Engine(backend="tf", backend_options={"cutoff_dim": params.cutoff_dim})
+        qnn = sf.Program(params.modes)
 
         # initialize QNN weights
-        weights = init_weights(modes, Qlayers) # our TensorFlow weights
+        weights = init_weights(params.modes, params.Qlayers) # our TensorFlow weights
         num_params = np.prod(weights.shape)   # total number of parameters in our model
 
         # Create array of Strawberry Fields symbolic gate arguments, matching
@@ -213,23 +214,23 @@ def SCTM():
         # Construct the symbolic Strawberry Fields program by
         # looping and applying layers to the program.
         with qnn.context as q:
-            for k in range(Qlayers):
-                layer(sf_params[k], q)
+            for k in range(params.Qlayers):
+                layer(sf_params[k], q, encoded_st)
 
 
-        opt = tf.keras.optimizers.Adam(learning_rate=lr)
+        opt = tf.keras.optimizers.Adam(learning_rate=params.lr)
 
         fidp = []
         lossp = []
         best_fid = 0
 
-        for i in range(reps):
+        for i in range(params.reps):
             # reset the engine if it has already been executed
             if eng.run_progs:
                 eng.reset()
 
             with tf.GradientTape() as tape:
-                loss, fid, ket, trace = cost(weights)
+                loss, fid, ket, trace = cost(weights, sf_params, eng, qnn, target_state)
 
             # Stores fidelity at each step
             fidp.append(fid.numpy())
@@ -252,12 +253,13 @@ def SCTM():
 
         x_train = np.array([learnt_state])
 
-
-
-x_train, target_state = GenerateTargetState(params.input_len, params.train_state_select)
-print('The target state for the training is chosen to be ' + str(target_state))
-
-autoencoder = Autoencoder(params.latent_dim)
-autoencoder.compile(optimizer='adam', loss=losses.MeanSquaredError())
-
-STM()
+def main():
+    x_train, target_state = GenerateTargetState(params.input_len, params.train_state_select)
+    print('The target state for the training is chosen to be ' + str(target_state))
+    print('The selected method is: ' + params.method_select)
+    if (params.method_select == 'STM'):
+        STM(x_train, target_state)
+    elif (params.method_select == 'SCTM'):
+        SCTM(x_train, target_state)
+    else:
+        print('Invalid method selection in terminal. ')
